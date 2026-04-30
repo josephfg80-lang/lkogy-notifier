@@ -2,9 +2,8 @@ name: LKOGY Notifier
 
 on:
   schedule:
-    # كل 10 دقايق — يكفي للمنتجات الجديدة وللتذكيرات اليومية
     - cron: "*/10 * * * *"
-  workflow_dispatch: {}   # زرار يدوي للتشغيل من واجهة GitHub
+  workflow_dispatch: {}
 
 jobs:
   notify:
@@ -19,12 +18,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
       - name: Install dependencies
-        run: npm install --omit=dev
+        run: npm install --omit=dev --no-audit --no-fund
 
-      - name: Run notifier (products + reminders)
+      - name: Run notifier
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: node notify.js
