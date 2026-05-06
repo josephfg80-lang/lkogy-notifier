@@ -1,8 +1,6 @@
 // =====================================================================
 // LKOGY Notifier — يشتغل على GitHub Actions كل 5 دقائق
-//   1) يفحص المنتجات الجديدة ويبعت إشعار FCM
-//   2) يبعت تذكيرات المهام (15:00 و 20:00 بتوقيت القاهرة)
-//   3) يبعت تذكيرات عجلة الحظ (18:00 و 20:00 و 23:00 بتوقيت القاهرة)
+//   يفحص المنتجات الجديدة ويبعت إشعار FCM فقط
 // =====================================================================
 
 const admin = require("firebase-admin");
@@ -14,69 +12,8 @@ const db        = admin.firestore();
 const messaging = admin.messaging();
 
 // =====================================================================
-// مواعيد التذكيرات بتوقيت القاهرة (DST بيتحسب تلقائياً عبر Intl)
-// =====================================================================
-const REMINDER_SLOTS = [
-    {
-        id:    "task-15",
-        hour:  15,
-        title: "☀️ تذكير العصر — INSTA LKOGY",
-        body:  "علمت علي المهام؟ متنساش تعلم انهاردة 😉✨",
-        tag:   "task-reminder",
-        sound: "notice.mp3"
-    },
-    {
-        id:    "task-20",
-        hour:  20,
-        title: "🌙 تذكير المساء — INSTA LKOGY",
-        body:  "علمت علي المهام؟ متنساش تعلم انهاردة قبل ما اليوم يخلص 😉✨",
-        tag:   "task-reminder",
-        sound: "notice.mp3"
-    },
-    {
-        id:    "wheel-18",
-        hour:  18,
-        title: "🎰 عجلة الحظ — لفّتك المجانية مستنياك!",
-        body:  "ابدأ لفّتك دلوقتي وكسب لكوجي مجاناً 🍀🎁",
-        tag:   "wheel-reminder",
-        sound: "notice.mp3"
-    },
-    {
-        id:    "wheel-20",
-        hour:  20,
-        title: "🎰 لسه ما لفّتش عجلة الحظ النهاردة؟",
-        body:  "تذكير: لفّتك المجانية لسه مستنياك 🍀",
-        tag:   "wheel-reminder",
-        sound: "notice.mp3"
-    },
-    {
-        id:    "wheel-23",
-        hour:  23,
-        title: "🚨 آخر فرصة! — عجلة الحظ",
-        body:  "آخر ساعة قبل منتصف الليل — لف عجلة الحظ قبل ما الفرصة تخلص 🍀⏰",
-        tag:   "wheel-reminder",
-        sound: "notice.mp3"
-    }
-];
-
-// =====================================================================
 // helpers
 // =====================================================================
-function getCairoNow() {
-    const fmt = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Africa/Cairo",
-        year:  "numeric", month: "2-digit", day:    "2-digit",
-        hour:  "2-digit", minute: "2-digit", hour12: false
-    });
-    const parts = fmt.formatToParts(new Date());
-    const get   = (k) => parts.find((p) => p.type === k).value;
-    return {
-        date: `${get("year")}-${get("month")}-${get("day")}`,
-        hour: parseInt(get("hour"),   10),
-        min:  parseInt(get("minute"), 10)
-    };
-}
-
 async function getAllTokenDocs() {
     const snap = await db.collection("fcmTokens").get();
     const list = [];
@@ -136,62 +73,7 @@ async function cleanupInvalid(refs) {
 }
 
 // =====================================================================
-// 1) تذكيرات المهام و عجلة الحظ (مرة واحدة في كل slot يومياً)
-// =====================================================================
-async function processReminders(allTokens) {
-    const cairo = getCairoNow();
-    const slot  = REMINDER_SLOTS.find((s) => s.hour === cairo.hour);
-    if (!slot) {
-        console.log(`⏰ Cairo ${cairo.date} ${cairo.hour}:${String(cairo.min).padStart(2,"0")} — no reminder slot.`);
-        return [];
-    }
-
-    // de-dupe: مش نبعت نفس الـ slot أكتر من مرة في نفس اليوم
-    const stateRef = db.doc("_meta/reminderState");
-    const snap     = await stateRef.get();
-    const state    = snap.exists ? (snap.data() || {}) : {};
-    if (state[slot.id] === cairo.date) {
-        console.log(`✓ Slot ${slot.id} already sent today (${cairo.date}).`);
-        return [];
-    }
-
-    console.log(`⏰ Sending ${slot.id} for ${cairo.date} (Cairo ${cairo.hour}:00)`);
-
-    const baseMessage = {
-        notification: { title: slot.title, body: slot.body },
-        data: {
-            type:  slot.id.startsWith("wheel") ? "wheel_reminder" : "task_reminder",
-            title: slot.title,
-            body:  slot.body,
-            url:   "/",
-            tag:   slot.tag,
-            slot:  slot.id
-        },
-        webpush: {
-            notification: {
-                icon:     "web icon-modified.jpg",
-                badge:    "web icon-modified.jpg",
-                vibrate:  [250, 120, 250, 120, 400],
-                requireInteraction: true,
-                renotify: true,
-                tag:      slot.tag,
-                actions:  [{ action: "open", title: "افتح التطبيق" }]
-            },
-            fcmOptions: { link: "/" },
-            headers:    { Urgency: "high", TTL: "21600" }   // صالح 6 ساعات
-        }
-    };
-
-    const res = await sendToTokens(allTokens, baseMessage, slot.id);
-
-    state[slot.id] = cairo.date;
-    await stateRef.set(state, { merge: true });
-
-    return res.invalid;
-}
-
-// =====================================================================
-// 2) المنتجات الجديدة (نفس منطق الـ baseline)
+// إشعار المنتجات الجديدة فقط
 // =====================================================================
 async function processNewProducts(allTokens) {
     const productsSnap = await db.collection("products").get();
@@ -206,6 +88,7 @@ async function processNewProducts(allTokens) {
     const stateSnap = await stateRef.get();
     const known     = stateSnap.exists ? (stateSnap.data().knownIds || null) : null;
 
+    // لو أول مرة نحفظ قائمة المنتجات بدون إرسال إشعارات
     if (!known) {
         await stateRef.set({
             knownIds: currentIds,
@@ -232,11 +115,12 @@ async function processNewProducts(allTokens) {
     const allInvalid = [];
     for (const productId of newIds) {
         const product  = currentMap[productId] || {};
-        const title    = "🛍️ منتج جديد في lkogy shop";
+        const title    = "🛍️ منتج جديد في LKOGY Shop";
         const priceTxt = product.price ? ` بـ ${product.price} لكوجي` : "";
-        const body     = `${product.name || "منتج جديد"}${priceTxt} — افتح دلوقتي قبل ما يخلص 🔥`;
+        const body     = `"${product.name || "منتج جديد"}"${priceTxt} نزل دلوقتي! خش شوفه قبل ما يخلص 🔥`;
         const image    = product.image || undefined;
 
+        // فلترة حسب الجنس أو المرحلة لو موجودة في بيانات المستخدم
         const targets = allTokens.filter((t) => {
             if (product.gender && t.data.gender && product.gender !== t.data.gender) return false;
             if (product.stage && product.stage !== "all" && t.data.stage &&
@@ -274,6 +158,7 @@ async function processNewProducts(allTokens) {
         allInvalid.push(...res.invalid);
     }
 
+    // تحديث قائمة المنتجات المعروفة
     await stateRef.set({
         knownIds: currentIds,
         lastRun:  admin.firestore.FieldValue.serverTimestamp()
@@ -293,10 +178,9 @@ async function processNewProducts(allTokens) {
     }
     console.log(`📱 ${allTokens.length} token(s) registered.`);
 
-    const invalid1 = await processReminders(allTokens);
-    const invalid2 = await processNewProducts(allTokens);
+    const invalid = await processNewProducts(allTokens);
 
-    await cleanupInvalid([...invalid1, ...invalid2]);
+    await cleanupInvalid(invalid);
 
     console.log("✅ Done.");
 })().catch((err) => {
